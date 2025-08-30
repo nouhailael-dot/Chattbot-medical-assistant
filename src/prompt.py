@@ -7,3 +7,16 @@ system_prompt = (
     "\n\n"
     "{context}"
 )
+
+router_prompt = (
+    "Classify the following question as either 'medical' or 'general'. "
+    "Question: {input}\n"
+    "Answer with only 'medical' or 'general'."
+)
+
+general_conversation_prompt = (
+    "You are a friendly and helpful assistant. "
+    "Answer the user's question in a concise and informative way."
+    "\n\n"
+    "Question: {input}"
+)
