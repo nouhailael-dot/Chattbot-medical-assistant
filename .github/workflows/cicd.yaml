@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
 
-
 jobs:
   Continuous-Integration:
     runs-on: ubuntu-22.04
@@ -21,10 +20,40 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-2
 
-      # NEW: ensure the ECR repository exists (idempotent)
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+        with:
+          mask-password: true
+
+      # Normalize & validate repo name to satisfy ECR regex
+      - name: Normalize ECR repository name (CI)
+        id: norm-repo
+        env:
+          RAW_REPO: ${{ secrets.ECR_REPO }}
+        run: |
+          set -euo pipefail
+          RAW="${RAW_REPO}"
+          # lower-case + trim + replace spaces with hyphens
+          NORM="$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | tr -d '\n' | xargs)"
+          NORM="${NORM// /-}"
+          # collapse multiple slashes (optional namespaces are allowed)
+          NORM="$(printf '%s' "$NORM" | sed -E 's:/{2,}:/:g')"
+          # Quick sanity: must match ECR allowed pattern
+          PAT='^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*$'
+          if ! printf '%s' "$NORM" | grep -Eq "$PAT"; then
+            echo "ERROR: ECR_REPO='$RAW' normalizes to '$NORM' which is not a valid ECR repository name." >&2
+            echo "Must match: $PAT" >&2
+            echo "Examples: 'my-service', 'team/tools.api', 'frontend_v2'" >&2
+            exit 1
+          fi
+          echo "Using ECR repository: $NORM"
+          echo "repo=$NORM" >> "$GITHUB_OUTPUT"
+
+      # Ensure the ECR repository exists (safe to run every time)
       - name: Ensure ECR repository exists
         env:
-          ECR_REPOSITORY: ${{ secrets.ECR_REPO }} # must be just the repo NAME, e.g. "chattbot-medical-assistant"
+          ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
         run: |
           set -euo pipefail
           aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region us-east-2 >/dev/null 2>&1 || \
@@ -36,7 +65,7 @@ jobs:
         id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
+          ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
           IMAGE_TAG: latest
         run: |
           set -euo pipefail
@@ -46,11 +75,9 @@ jobs:
           IMAGE_TAG=$(echo "$IMAGE_TAG" | tr -d '\n' | xargs)
 
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "URL: $IMAGE"
-          # use the supported output mechanism
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
   Continuous-Deployment:
@@ -72,7 +99,53 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
+        with:
+          mask-password: true
+
+      # Normalize & validate repo name again in CD (uses the same secret)
+      - name: Normalize ECR repository name (CD)
+        id: norm-repo
+        env:
+          RAW_REPO: ${{ secrets.ECR_REPO }}
+        run: |
+          set -euo pipefail
+          RAW="${RAW_REPO}"
+          NORM="$(echo "$RAW" | tr '[:upper:]' '[:lower:]' | tr -d '\n' | xargs)"
+          NORM="${NORM// /-}"
+          NORM="$(printf '%s' "$NORM" | sed -E 's:/{2,}:/:g')"
+          PAT='^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*$'
+          if ! printf '%s' "$NORM" | grep -Eq "$PAT"; then
+            echo "ERROR: ECR_REPO='$RAW' normalizes to '$NORM' which is not a valid ECR repository name." >&2
+            echo "Must match: $PAT" >&2
+            exit 1
+          fi
+          echo "repo=$NORM" >> "$GITHUB_OUTPUT"
+
+      # Pull explicitly so issues show up clearly during deploy
+      - name: Pull image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
+          IMAGE_TAG: latest
+        run: |
+          set -euo pipefail
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker pull "$IMAGE"
 
       - name: Run Docker Image to serve users
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
+          IMAGE_TAG: latest
         run: |
-         docker run -d -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" -e AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" -e PINECONE_API_KEY="${{ secrets.PINECONE_API_KEY }}" -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" -p 8080:8080 "${{ steps.login-ecr.outputs.registry }}"/"${{ secrets.ECR_REPO }}":latest
+          set -euo pipefail
+          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker rm -f app || true
+          docker run -d --name app \
+            -e AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -e AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            -e AWS_DEFAULT_REGION="${{ secrets.AWS_DEFAULT_REGION }}" \
+            -e PINECONE_API_KEY="${{ secrets.PINECONE_API_KEY }}" \
+            -e OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+            -p 8080:8080 \
+            "$IMAGE"
