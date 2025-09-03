@@ -32,6 +32,11 @@ jobs:
           ECR_REPOSITORY: ${{ secrets.ECR_REPO }}
           IMAGE_TAG: latest
         run: |
+          # Trim whitespace/newlines from variables
+          ECR_REGISTRY=$(echo "$ECR_REGISTRY" | tr -d '\n' | xargs)
+          ECR_REPOSITORY=$(echo "$ECR_REPOSITORY" | tr -d '\n' | xargs)
+          IMAGE_TAG=$(echo "$IMAGE_TAG" | tr -d '\n' | xargs)
+          
           docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           echo "URL: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
