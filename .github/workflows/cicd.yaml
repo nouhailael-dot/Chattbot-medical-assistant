@@ -96,20 +96,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
 
-      # Ensure AWS CLI v2 exists on the runner
-      - name: Ensure AWS CLI v2 present
-        run: |
-          set -euo pipefail
-          if ! command -v aws >/dev/null 2>&1; then
-            tmpdir="$(mktemp -d)"
-            cd "$tmpdir"
-            sudo apt-get update -y
-            sudo apt-get install -y unzip
-            curl -fsSLO "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
-            unzip -q awscli-exe-linux-x86_64.zip
-            sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-          fi
-          aws --version
 
       # Normalize & validate repo name again in CD
       - name: Normalize ECR repository name (CD)
