@@ -17,11 +17,11 @@ services:
       - "11434:11434"                 # expose to host (optional)
     volumes:
       - ollama:/root/.ollama          # persist models
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -sS http://localhost:11434/api/tags >/dev/null"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+    #healthcheck:
+      #test: ["CMD", "bash", "-lc", "curl -sS http://localhost:11434/api/tags >/dev/null"]
+      #interval: 10s
+      #timeout: 5s
+      #retries: 20
 
   app:
     image: "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG:-latest}"
