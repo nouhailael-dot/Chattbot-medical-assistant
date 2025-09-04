@@ -1,0 +1,55 @@
+version: "3.9"
+
+# Place this file at the ROOT of your repo: ./docker-compose.yml
+# It expects these env vars to be present in the shell (exported by your GH Action on EC2):
+#   ECR_REGISTRY, ECR_REPOSITORY, IMAGE_TAG (optional, defaults to "latest")
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+#   PINECONE_API_KEY, OPENAI_API_KEY  (OPENAI_API_KEY optional if you only use Ollama)
+#
+# For local dev, you can also create a .env file with the same keys; docker compose will load it automatically.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"                 # expose to host (optional)
+    volumes:
+      - ollama:/root/.ollama          # persist models
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -sS http://localhost:11434/api/tags >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  app:
+    image: "${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG:-latest}"
+    container_name: app
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      # cloud creds / APIs (GH Actions should export these on the EC2 host before running compose)
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      AWS_DEFAULT_REGION: "${AWS_DEFAULT_REGION}"
+      PINECONE_API_KEY: "${PINECONE_API_KEY}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
+      # point your code to the Ollama service (DON'T use localhost from inside the container)
+      OLLAMA_HOST: "http://ollama:11434"
+    ports:
+      - "8080:8080"                   # if your app listens on 5000, change to "8080:5000"
+    # Optional: uncomment if you need files from the repo at runtime (most CI pushes a built image, so not needed)
+    # volumes:
+    #   - ./:/app:ro
+    # Optional healthcheck for your app (adjust path if you have a health endpoint)
+    # healthcheck:
+    #   test: ["CMD", "bash", "-lc", "curl -fsS http://localhost:8080/health || exit 1"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 10
+
+volumes:
+  ollama:
