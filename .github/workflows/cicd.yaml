@@ -96,7 +96,6 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
 
-
       # Normalize & validate repo name again in CD
       - name: Normalize ECR repository name (CD)
         id: norm-repo
@@ -115,38 +114,31 @@ jobs:
           fi
           echo "repo=$NORM" >> "$GITHUB_OUTPUT"
 
+      - name: Login to Amazon ECR (CD)
+        id: login-ecr-cd
+        uses: aws-actions/amazon-ecr-login@v4
+
       - name: Pull image
         env:
-          AWS_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ECR_REGISTRY: ${{ steps.login-ecr-cd.outputs.registry }}
           ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
           IMAGE_TAG: latest
         run: |
           set -euo pipefail
-          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-
-          aws ecr get-login-password --region "${AWS_REGION}" \
-            | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
-
+          echo "Pulling ${IMAGE}"
           docker pull "${IMAGE}"
 
       - name: Deploy with Docker Compose
         env:
-          AWS_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          ECR_REGISTRY: ${{ steps.login-ecr-cd.outputs.registry }}
           ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
           IMAGE_TAG: latest
-          # app secrets for your service:
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
-          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-          # Make envs available to compose (if your compose uses them)
           export ECR_REGISTRY ECR_REPOSITORY IMAGE_TAG PINECONE_API_KEY OPENAI_API_KEY
-
           docker compose pull
           docker compose down
           docker compose up -d
