@@ -82,7 +82,7 @@ jobs:
 
   Continuous-Deployment:
     needs: Continuous-Integration
-    runs-on: self-hosted
+    runs-on: ubuntu-22.04
     environment: AWS_ACCESS_KEY_ID
 
     steps:
