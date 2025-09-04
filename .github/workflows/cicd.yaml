@@ -87,22 +87,31 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+      - name: Configure AWS credentials (self-hosted)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-2
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-        with:
-          mask-password: true
+      # Ensure AWS CLI v2 exists on the runner
+      - name: Ensure AWS CLI v2 present
+        run: |
+          set -euo pipefail
+          if ! command -v aws >/dev/null 2>&1; then
+            tmpdir="$(mktemp -d)"
+            cd "$tmpdir"
+            sudo apt-get update -y
+            sudo apt-get install -y unzip
+            curl -fsSLO "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+            unzip -q awscli-exe-linux-x86_64.zip
+            sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
+          fi
+          aws --version
 
-      # Normalize & validate repo name again in CD (uses the same secret)
+      # Normalize & validate repo name again in CD
       - name: Normalize ECR repository name (CD)
         id: norm-repo
         env:
@@ -115,43 +124,44 @@ jobs:
           NORM="$(printf '%s' "$NORM" | sed -E 's:/{2,}:/:g')"
           PAT='^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*$'
           if ! printf '%s' "$NORM" | grep -Eq "$PAT"; then
-            echo "ERROR: ECR_REPO='$RAW' normalizes to '$NORM' which is not a valid ECR repository name." >&2
-            echo "Must match: $PAT" >&2
+            echo "ERROR: ECR_REPO='$RAW' -> '$NORM' invalid for ECR." >&2
             exit 1
           fi
           echo "repo=$NORM" >> "$GITHUB_OUTPUT"
 
-      # Pull explicitly so issues show up clearly during deploy
       - name: Pull image
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          AWS_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
           IMAGE_TAG: latest
         run: |
           set -euo pipefail
-          IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker pull "$IMAGE"
+          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+
+          docker pull "${IMAGE}"
 
       - name: Deploy with Docker Compose
         env:
-          # export all the secrets into the environment so Compose can see them
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          AWS_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-2' }}
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
           ECR_REPOSITORY: ${{ steps.norm-repo.outputs.repo }}
           IMAGE_TAG: latest
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+          # app secrets for your service:
           PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
-          aws ecr get-login-password --region "$AWS_DEFAULT_REGION" \
-            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-          # Pull both app image + ollama if needed
-          docker compose pull
+          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-          # Restart services cleanly
+          # Make envs available to compose (if your compose uses them)
+          export ECR_REGISTRY ECR_REPOSITORY IMAGE_TAG PINECONE_API_KEY OPENAI_API_KEY
+
+          docker compose pull
           docker compose down
           docker compose up -d
-
           docker compose ps
