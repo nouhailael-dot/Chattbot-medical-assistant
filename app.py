@@ -16,7 +16,6 @@ load_dotenv()
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 os.environ["PINECONE_API_KEY"] = PINECONE_API_KEY
 
-
 embeddings = download_embeddings()
 
 index_name = "medical-chatbot"
@@ -26,7 +25,9 @@ docsearch = PineconeVectorStore(
 
 retriever = docsearch.as_retriever(search_type="similarity", search_kwargs={"k": 3})
 
-chatModel = Ollama(model="mistral")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")  # fallback to default if not set
+
+chatModel = Ollama(model="mistral", base_url=OLLAMA_BASE_URL)
 
 # I see where the issue is
 
