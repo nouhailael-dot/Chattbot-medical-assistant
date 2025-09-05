@@ -28,8 +28,7 @@ services:
     container_name: app
     restart: unless-stopped
     depends_on:
-      ollama:
-        condition: service_healthy
+      - ollama
     environment:
       # cloud creds / APIs (GH Actions should export these on the EC2 host before running compose)
       AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
